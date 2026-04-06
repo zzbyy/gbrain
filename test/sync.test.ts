@@ -121,4 +121,59 @@ describe('pathToSlug', () => {
   test('no prefix when not provided', () => {
     expect(pathToSlug('people/pedro.md')).toBe('people/pedro');
   });
+
+  test('handles empty string', () => {
+    expect(pathToSlug('')).toBe('');
+  });
+
+  test('handles file with only extension', () => {
+    expect(pathToSlug('.md')).toBe('');
+  });
+});
+
+describe('isSyncable edge cases', () => {
+  test('rejects uppercase .MD extension', () => {
+    // isSyncable checks path.endsWith('.md'), so .MD should fail
+    expect(isSyncable('people/someone.MD')).toBe(false);
+  });
+
+  test('rejects files with no extension', () => {
+    expect(isSyncable('README')).toBe(false);
+  });
+
+  test('accepts deeply nested .md files', () => {
+    expect(isSyncable('a/b/c/d/e/f/deep.md')).toBe(true);
+  });
+
+  test('rejects .md files inside nested hidden dirs', () => {
+    expect(isSyncable('docs/.internal/secret.md')).toBe(false);
+  });
+});
+
+describe('buildSyncManifest edge cases', () => {
+  test('handles tab-separated fields correctly', () => {
+    const output = "A\tpath/to/file.md";
+    const manifest = buildSyncManifest(output);
+    expect(manifest.added).toEqual(['path/to/file.md']);
+  });
+
+  test('handles multiple renames', () => {
+    const output = [
+      'R100\told/a.md\tnew/a.md',
+      'R095\told/b.md\tnew/b.md',
+    ].join('\n');
+    const manifest = buildSyncManifest(output);
+    expect(manifest.renamed).toHaveLength(2);
+    expect(manifest.renamed[0].from).toBe('old/a.md');
+    expect(manifest.renamed[1].from).toBe('old/b.md');
+  });
+
+  test('ignores unknown status codes', () => {
+    const output = "X\tunknown/file.md";
+    const manifest = buildSyncManifest(output);
+    expect(manifest.added).toEqual([]);
+    expect(manifest.modified).toEqual([]);
+    expect(manifest.deleted).toEqual([]);
+    expect(manifest.renamed).toEqual([]);
+  });
 });
