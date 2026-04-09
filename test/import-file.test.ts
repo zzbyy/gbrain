@@ -6,7 +6,7 @@ import type { BrainEngine } from '../src/core/engine.ts';
 
 const TMP = join(import.meta.dir, '.tmp-import-test');
 
-// Minimal mock engine that tracks calls
+// Minimal mock engine that tracks calls and supports transaction()
 function mockEngine(overrides: Partial<Record<string, any>> = {}): BrainEngine {
   const calls: { method: string; args: any[] }[] = [];
   const track = (method: string) => (...args: any[]) => {
@@ -20,6 +20,8 @@ function mockEngine(overrides: Partial<Record<string, any>> = {}): BrainEngine {
       if (prop === '_calls') return calls;
       if (prop === 'getTags') return overrides.getTags || (() => Promise.resolve([]));
       if (prop === 'getPage') return overrides.getPage || (() => Promise.resolve(null));
+      // transaction: just call the fn with the same engine (no real DB transaction in tests)
+      if (prop === 'transaction') return async (fn: (tx: BrainEngine) => Promise<any>) => fn(engine);
       return track(prop);
     },
   });
@@ -74,7 +76,6 @@ This is the compiled truth.
 
   test('skips files larger than MAX_FILE_SIZE (1MB)', async () => {
     const filePath = join(TMP, 'big-file.md');
-    // Create a file > 1MB
     const bigContent = '---\ntitle: Big\n---\n' + 'x'.repeat(1_100_000);
     writeFileSync(filePath, bigContent);
 
@@ -83,7 +84,6 @@ This is the compiled truth.
 
     expect(result.status).toBe('skipped');
     expect(result.error).toContain('too large');
-    // Engine should NOT have been called
     expect((engine as any)._calls.length).toBe(0);
   });
 
@@ -97,10 +97,26 @@ title: Unchanged
 Same content.
 `);
 
-    // Mock engine returns a page with matching hash
+    // Hash now includes ALL fields (title, type, frontmatter, tags)
     const { createHash } = await import('crypto');
+    const { parseMarkdown } = await import('../src/core/markdown.ts');
+    const content = `---
+type: concept
+title: Unchanged
+---
+
+Same content.
+`;
+    const parsed = parseMarkdown(content, 'concepts/unchanged.md');
     const hash = createHash('sha256')
-      .update('Same content.\n---\n')
+      .update(JSON.stringify({
+        title: parsed.title,
+        type: parsed.type,
+        compiled_truth: parsed.compiled_truth,
+        timeline: parsed.timeline,
+        frontmatter: parsed.frontmatter,
+        tags: parsed.tags.sort(),
+      }))
       .digest('hex');
 
     const engine = mockEngine({
@@ -110,7 +126,6 @@ Same content.
     const result = await importFile(engine, filePath, 'concepts/unchanged.md', { noEmbed: true });
     expect(result.status).toBe('skipped');
 
-    // putPage should NOT have been called
     const calls = (engine as any)._calls;
     const putCall = calls.find((c: any) => c.method === 'putPage');
     expect(putCall).toBeUndefined();
@@ -138,11 +153,8 @@ Content here.
     const removeCalls = calls.filter((c: any) => c.method === 'removeTag');
     const addCalls = calls.filter((c: any) => c.method === 'addTag');
 
-    // old-tag should be removed (not in new set)
     expect(removeCalls.length).toBe(1);
     expect(removeCalls[0].args[1]).toBe('old-tag');
-
-    // new-tag and kept-tag should be added
     expect(addCalls.length).toBe(2);
   });
 
@@ -164,7 +176,7 @@ This is compiled truth content that should be chunked as compiled_truth source.
     const result = await importFile(engine, filePath, 'concepts/chunked.md', { noEmbed: true });
 
     expect(result.status).toBe('imported');
-    expect(result.chunks).toBeGreaterThanOrEqual(2); // at least 1 CT + 1 TL
+    expect(result.chunks).toBeGreaterThanOrEqual(2);
 
     const calls = (engine as any)._calls;
     const chunkCall = calls.find((c: any) => c.method === 'upsertChunks');
@@ -231,7 +243,6 @@ Content to chunk but not embed.
     const result = await importFile(engine, filePath, 'concepts/no-embed.md', { noEmbed: true });
 
     expect(result.status).toBe('imported');
-    // Chunks should NOT have embeddings
     const calls = (engine as any)._calls;
     const chunkCall = calls.find((c: any) => c.method === 'upsertChunks');
     if (chunkCall) {

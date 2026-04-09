@@ -6,7 +6,7 @@ import { chunkText } from './chunkers/recursive.ts';
 import { embedBatch } from './embedding.ts';
 import type { ChunkInput } from './types.ts';
 
-export interface ImportFileResult {
+export interface ImportResult {
   slug: string;
   status: 'imported' | 'skipped' | 'error';
   chunks: number;
@@ -15,25 +15,30 @@ export interface ImportFileResult {
 
 const MAX_FILE_SIZE = 1_000_000; // 1MB
 
-export async function importFile(
+/**
+ * Import content from a string. Core pipeline:
+ * parse -> hash -> embed (external) -> transaction(version + putPage + tags + chunks)
+ *
+ * Used by put_page operation and importFromFile.
+ */
+export async function importFromContent(
   engine: BrainEngine,
-  filePath: string,
-  relativePath: string,
-  opts: { noEmbed: boolean },
-): Promise<ImportFileResult> {
-  // Skip files > 1MB
-  const stat = statSync(filePath);
-  if (stat.size > MAX_FILE_SIZE) {
-    return { slug: relativePath, status: 'skipped', chunks: 0, error: `File too large (${stat.size} bytes)` };
-  }
+  slug: string,
+  content: string,
+  opts: { noEmbed?: boolean } = {},
+): Promise<ImportResult> {
+  const parsed = parseMarkdown(content, slug + '.md');
 
-  const content = readFileSync(filePath, 'utf-8');
-  const parsed = parseMarkdown(content, relativePath);
-  const slug = parsed.slug;
-
-  // Check content hash for idempotency
+  // Hash includes ALL fields for idempotency (not just compiled_truth + timeline)
   const hash = createHash('sha256')
-    .update(parsed.compiled_truth + '\n---\n' + parsed.timeline)
+    .update(JSON.stringify({
+      title: parsed.title,
+      type: parsed.type,
+      compiled_truth: parsed.compiled_truth,
+      timeline: parsed.timeline,
+      frontmatter: parsed.frontmatter,
+      tags: parsed.tags.sort(),
+    }))
     .digest('hex');
 
   const existing = await engine.getPage(slug);
@@ -41,68 +46,79 @@ export async function importFile(
     return { slug, status: 'skipped', chunks: 0 };
   }
 
-  // Upsert page
-  await engine.putPage(slug, {
-    type: parsed.type,
-    title: parsed.title,
-    compiled_truth: parsed.compiled_truth,
-    timeline: parsed.timeline,
-    frontmatter: parsed.frontmatter,
-  });
-
-  // Tag reconciliation: remove stale tags, add current ones
-  const existingTags = await engine.getTags(slug);
-  const newTags = new Set(parsed.tags);
-  for (const oldTag of existingTags) {
-    if (!newTags.has(oldTag)) {
-      await engine.removeTag(slug, oldTag);
-    }
-  }
-  for (const tag of parsed.tags) {
-    await engine.addTag(slug, tag);
-  }
-
   // Chunk compiled_truth and timeline
   const chunks: ChunkInput[] = [];
-
   if (parsed.compiled_truth.trim()) {
-    const ctChunks = chunkText(parsed.compiled_truth);
-    for (const c of ctChunks) {
-      chunks.push({
-        chunk_index: chunks.length,
-        chunk_text: c.text,
-        chunk_source: 'compiled_truth',
-      });
+    for (const c of chunkText(parsed.compiled_truth)) {
+      chunks.push({ chunk_index: chunks.length, chunk_text: c.text, chunk_source: 'compiled_truth' });
+    }
+  }
+  if (parsed.timeline?.trim()) {
+    for (const c of chunkText(parsed.timeline)) {
+      chunks.push({ chunk_index: chunks.length, chunk_text: c.text, chunk_source: 'timeline' });
     }
   }
 
-  if (parsed.timeline.trim()) {
-    const tlChunks = chunkText(parsed.timeline);
-    for (const c of tlChunks) {
-      chunks.push({
-        chunk_index: chunks.length,
-        chunk_text: c.text,
-        chunk_source: 'timeline',
-      });
-    }
-  }
-
-  // Embed if requested
+  // Embed BEFORE the transaction (external API call)
   if (!opts.noEmbed && chunks.length > 0) {
     try {
       const embeddings = await embedBatch(chunks.map(c => c.chunk_text));
-      for (let j = 0; j < chunks.length; j++) {
-        chunks[j].embedding = embeddings[j];
-        chunks[j].token_count = Math.ceil(chunks[j].chunk_text.length / 4);
+      for (let i = 0; i < chunks.length; i++) {
+        chunks[i].embedding = embeddings[i];
+        chunks[i].token_count = Math.ceil(chunks[i].chunk_text.length / 4);
       }
-    } catch {
-      // Embedding failure is non-fatal, chunks still saved without embeddings
-    }
+    } catch { /* non-fatal */ }
   }
 
-  if (chunks.length > 0) {
-    await engine.upsertChunks(slug, chunks);
-  }
+  // Transaction wraps all DB writes
+  await engine.transaction(async (tx) => {
+    if (existing) await tx.createVersion(slug);
+
+    await tx.putPage(slug, {
+      type: parsed.type,
+      title: parsed.title,
+      compiled_truth: parsed.compiled_truth,
+      timeline: parsed.timeline || '',
+      frontmatter: parsed.frontmatter,
+    });
+
+    // Tag reconciliation: remove stale, add current
+    const existingTags = await tx.getTags(slug);
+    const newTags = new Set(parsed.tags);
+    for (const old of existingTags) {
+      if (!newTags.has(old)) await tx.removeTag(slug, old);
+    }
+    for (const tag of parsed.tags) {
+      await tx.addTag(slug, tag);
+    }
+
+    if (chunks.length > 0) {
+      await tx.upsertChunks(slug, chunks);
+    }
+  });
 
   return { slug, status: 'imported', chunks: chunks.length };
 }
+
+/**
+ * Import from a file path. Validates size, reads content, delegates to importFromContent.
+ */
+export async function importFromFile(
+  engine: BrainEngine,
+  filePath: string,
+  relativePath: string,
+  opts: { noEmbed?: boolean } = {},
+): Promise<ImportResult> {
+  const stat = statSync(filePath);
+  if (stat.size > MAX_FILE_SIZE) {
+    return { slug: relativePath, status: 'skipped', chunks: 0, error: `File too large (${stat.size} bytes)` };
+  }
+
+  const content = readFileSync(filePath, 'utf-8');
+  const parsed = parseMarkdown(content, relativePath);
+  return importFromContent(engine, parsed.slug, content, opts);
+}
+
+// Backward compat
+export const importFile = importFromFile;
+export type ImportFileResult = ImportResult;

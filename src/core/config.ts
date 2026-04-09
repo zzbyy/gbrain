@@ -14,13 +14,29 @@ export interface GBrainConfig {
   anthropic_api_key?: string;
 }
 
+/**
+ * Load config with credential precedence: env vars > config file.
+ * Plugin config is handled by the plugin runtime injecting env vars.
+ */
 export function loadConfig(): GBrainConfig | null {
+  let fileConfig: GBrainConfig | null = null;
   try {
     const raw = readFileSync(CONFIG_PATH, 'utf-8');
-    return JSON.parse(raw) as GBrainConfig;
-  } catch {
-    return null;
-  }
+    fileConfig = JSON.parse(raw) as GBrainConfig;
+  } catch { /* no config file */ }
+
+  // Try env vars
+  const dbUrl = process.env.GBRAIN_DATABASE_URL || process.env.DATABASE_URL;
+
+  if (!fileConfig && !dbUrl) return null;
+
+  // Merge: env vars override config file
+  return {
+    engine: 'postgres',
+    ...fileConfig,
+    ...(dbUrl ? { database_url: dbUrl } : {}),
+    ...(process.env.OPENAI_API_KEY ? { openai_api_key: process.env.OPENAI_API_KEY } : {}),
+  };
 }
 
 export function saveConfig(config: GBrainConfig): void {
