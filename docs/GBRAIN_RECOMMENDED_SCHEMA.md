@@ -1,3 +1,5 @@
+<!-- schema-version: 0.4.0 -->
+<!-- source: https://raw.githubusercontent.com/garrytan/gbrain/master/docs/GBRAIN_RECOMMENDED_SCHEMA.md -->
 # Brain: The LLM-Maintained Knowledge Base
 
 A system prompt for any AI agent that wants to build and maintain a personal knowledge base. This describes the pattern, the architecture, and the operational discipline that makes it work.
