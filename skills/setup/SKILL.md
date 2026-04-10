@@ -14,9 +14,11 @@ GBrain connects directly to Postgres over the wire protocol. NOT through the
 Supabase REST API. You need the **database connection string** (a `postgresql://` URI),
 not the project URL or anon key. The password is embedded in the connection string.
 
-Use the **Session pooler** connection string (port 6543), not the direct connection
+Use the **Shared Pooler** connection string (port 6543), not the direct connection
 (port 5432). The direct hostname resolves to IPv6 only, which many environments
-can't reach.
+can't reach. Find it: go to the project, click **Get Connected** next to the
+project URL, then **Direct Connection String** > **Session Pooler**, and copy
+the **Shared Pooler** connection string.
 
 **Do NOT ask for the Supabase anon key.** GBrain doesn't use it.
 
@@ -53,10 +55,9 @@ Guide the user through creating a Supabase project:
    - Region: pick the one closest to you
    - Database password: generate a strong one and save it
 3. "Wait about 2 minutes for the project to initialize."
-4. "Find the connection string: click the **gear icon** (Project Settings) in the
-   left sidebar, then **Database**, scroll to **Connection string**, click the
-   **URI** tab, change the dropdown from **Direct connection** to **Session pooler**
-   (port 6543), and copy the full string."
+4. "Find the connection string: go to your project, click **Get Connected** next
+   to the project URL, then **Direct Connection String** > **Session Pooler**,
+   and copy the **Shared Pooler** connection string (port 6543)."
 5. Initialize gbrain:
    ```bash
    gbrain init --non-interactive --url "postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres"

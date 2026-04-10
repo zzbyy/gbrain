@@ -237,9 +237,10 @@ How many pages are in the brain now?
 GBrain keeps your brain current. After setup, `gbrain sync --watch` polls your git repo and imports only what changed. Binary files (images, PDFs, audio) can be moved to cloud storage with `gbrain files mirror` to slim down your git repo.
 
 > **Supabase settings:** GBrain connects directly to Postgres (not the REST API).
-> You need the **Session pooler connection string** (port 6543), not the project URL
-> or anon key. Find it: Project Settings > Database > Connection string > URI tab >
-> change dropdown to "Session pooler".
+> You need the **Shared Pooler connection string**, not the project URL or anon key.
+> Find it: go to your project, click **Get Connected** next to the project URL,
+> then **Direct Connection String** > **Session Pooler**, and copy the
+> **Shared Pooler** connection string.
 
 ### GBrain without OpenClaw
 
