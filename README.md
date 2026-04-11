@@ -74,8 +74,12 @@ Your brain gets new senses as they're built. Run `gbrain integrations` to see wh
 | Recipe | Category | What It Does |
 |--------|----------|-------------|
 | [Voice-to-Brain](recipes/twilio-voice-brain.md) | Sense | Phone calls create brain pages via Twilio + OpenAI Realtime |
+| [Email-to-Brain](recipes/email-to-brain.md) | Sense | Gmail messages flow into entity pages via deterministic collector |
+| [X-to-Brain](recipes/x-to-brain.md) | Sense | Twitter monitoring with deletion detection + engagement velocity |
+| [Calendar-to-Brain](recipes/calendar-to-brain.md) | Sense | Google Calendar events become searchable daily brain pages |
+| [Meeting Sync](recipes/meeting-sync.md) | Sense | Circleback transcripts auto-import with attendee propagation |
 
-More senses shipping with each release. Run `gbrain integrations` to see what's available and `gbrain check-update` to get notified when new recipes drop.
+Run `gbrain integrations` to see what's configured and `gbrain check-update` for new recipes.
 
 Your agent sets up each integration for you. It reads the recipe, asks for API keys, validates each one, and runs a smoke test. [Markdown is code](docs/ethos/THIN_HARNESS_FAT_SKILLS.md) — the recipe IS the installer.
 
@@ -398,11 +402,15 @@ These are standalone markdown instruction sets. Load them into your agent's cont
 
 Run `gbrain integrations` to see available recipes. Your agent reads the recipe and walks you through setup.
 
-| Recipe | Category | What It Does | Guide |
-|--------|----------|-------------|-------|
-| [voice-to-brain](recipes/twilio-voice-brain.md) | Sense | Phone calls create brain pages via Twilio + OpenAI Realtime | [Getting Data In](docs/integrations/README.md) |
+| Recipe | Category | What It Does |
+|--------|----------|-------------|
+| [voice-to-brain](recipes/twilio-voice-brain.md) | Sense | Phone calls → brain pages (Twilio + OpenAI Realtime) |
+| [email-to-brain](recipes/email-to-brain.md) | Sense | Gmail → entity pages (deterministic collector) |
+| [x-to-brain](recipes/x-to-brain.md) | Sense | Twitter → brain pages (timeline + mentions + deletions) |
+| [calendar-to-brain](recipes/calendar-to-brain.md) | Sense | Google Calendar → searchable daily pages |
+| [meeting-sync](recipes/meeting-sync.md) | Sense | Circleback transcripts → brain pages with attendees |
 
-More recipes shipping soon: email-to-brain, x-to-brain, calendar-to-brain, meeting-sync.
+Run `gbrain integrations` for status. See [Getting Data In](docs/integrations/README.md) for the full guide.
 
 #### As a TypeScript library
 

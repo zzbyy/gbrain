@@ -67,7 +67,11 @@ Wiring up your life.
 |-------|---------------|
 | [Credential Gateway](integrations/credential-gateway.md) | ClawVisor / Hermes for Gmail, Calendar, Contacts |
 | [Meeting & Call Webhooks](integrations/meeting-webhooks.md) | Circleback transcripts + Quo/OpenPhone SMS/calls |
-| [Voice-to-Brain Recipe](../recipes/twilio-voice-brain.md) | Phone calls create brain pages (self-installing) |
+| [Voice-to-Brain](../recipes/twilio-voice-brain.md) | Phone calls create brain pages via Twilio + OpenAI Realtime |
+| [Email-to-Brain](../recipes/email-to-brain.md) | Gmail messages flow into entity pages via deterministic collector |
+| [X-to-Brain](../recipes/x-to-brain.md) | Twitter monitoring with deletion detection + engagement velocity |
+| [Calendar-to-Brain](../recipes/calendar-to-brain.md) | Google Calendar events become searchable daily brain pages |
+| [Meeting Sync](../recipes/meeting-sync.md) | Circleback transcripts auto-import with attendee propagation |
 
 ## Administration
 

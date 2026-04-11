@@ -29,8 +29,10 @@ These are integration recipes your agent can set up for you. Run
 | Recipe | Category | What It Does | Setup Time |
 |--------|----------|-------------|------------|
 | [voice-to-brain](../../recipes/twilio-voice-brain.md) | Sense | Phone calls create brain pages via Twilio + OpenAI Realtime | 30 min |
-
-More recipes coming: email-to-brain, x-to-brain, calendar-to-brain.
+| [email-to-brain](../../recipes/email-to-brain.md) | Sense | Gmail messages flow into entity pages via deterministic collector | 20 min |
+| [x-to-brain](../../recipes/x-to-brain.md) | Sense | Twitter timeline, mentions, keyword monitoring with deletion detection | 15 min |
+| [calendar-to-brain](../../recipes/calendar-to-brain.md) | Sense | Google Calendar events become searchable daily brain pages | 20 min |
+| [meeting-sync](../../recipes/meeting-sync.md) | Sense | Circleback meeting transcripts auto-import with attendee propagation | 15 min |
 
 ### Manual Integration Guides
 
