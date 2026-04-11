@@ -37,7 +37,9 @@ Getting data in and keeping it current.
 | [Enrichment Pipeline](guides/enrichment-pipeline.md) | 7-step protocol, tier system (Tier 1/2/3 by importance) |
 | [Meeting Ingestion](guides/meeting-ingestion.md) | Always pull complete transcript, propagate to all entity pages |
 | [Content & Media Ingestion](guides/content-media.md) | YouTube, social media bundles, PDFs/documents |
+| [Diligence Ingestion](guides/diligence-ingestion.md) | Data room materials: pitch decks, financial models, cap tables |
 | [Deterministic Collectors](guides/deterministic-collectors.md) | Code for data, LLMs for judgment. The collector pattern |
+| [Idea Capture & Originals](guides/idea-capture.md) | Depth test, originality distribution, deep cross-linking |
 | [Getting Data In](integrations/README.md) | Integration recipes: voice, email, X, calendar |
 
 ## Operations
@@ -47,15 +49,19 @@ Running a production brain.
 | Guide | What It Covers |
 |-------|---------------|
 | [Reference Cron Schedule](guides/cron-schedule.md) | 20+ recurring jobs, quiet hours, dream cycle |
+| [Quiet Hours & Timezone](guides/quiet-hours.md) | Hold notifications during sleep, timezone-aware delivery |
 | [Executive Assistant Pattern](guides/executive-assistant.md) | Email triage, meeting prep, scheduling |
-| [Five Operational Disciplines](guides/operational-disciplines.md) | Signal detection, brain-first, sync-after-write, heartbeat, dream cycle |
+| [Operational Disciplines](guides/operational-disciplines.md) | Signal detection, brain-first, sync-after-write, heartbeat, dream cycle |
+| [Skill Development Cycle](guides/skill-development.md) | 5-step cycle: concept, prototype, evaluate, codify, cron |
 
-## Search & Memory
+## Architecture
 
-Understanding and querying the brain.
+How to structure your system.
 
 | Guide | What It Covers |
 |-------|---------------|
+| [Two-Repo Architecture](guides/repo-architecture.md) | Agent repo vs brain repo, boundary rules, decision tree |
+| [Sub-Agent Model Routing](guides/sub-agent-routing.md) | Which model for which task, signal detector pattern, cost optimization |
 | [The Three Search Modes](guides/search-modes.md) | Keyword, hybrid, direct. When to use each |
 | [Brain vs Agent Memory](guides/brain-vs-memory.md) | 3 layers: GBrain (world knowledge), agent memory, session |
 

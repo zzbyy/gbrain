@@ -35,6 +35,12 @@ server are both generated from this single source. Skills are fat markdown files
 - `docs/architecture/infra-layer.md` — Shared infrastructure documentation
 - `docs/ethos/THIN_HARNESS_FAT_SKILLS.md` — Architecture philosophy essay
 - `docs/ethos/MARKDOWN_SKILLS_AS_RECIPES.md` — "Homebrew for Personal AI" essay
+- `docs/guides/repo-architecture.md` — Two-repo pattern (agent vs brain)
+- `docs/guides/sub-agent-routing.md` — Model routing table for sub-agents
+- `docs/guides/skill-development.md` — 5-step skill development cycle + MECE
+- `docs/guides/idea-capture.md` — Originality distribution, depth test, cross-linking
+- `docs/guides/quiet-hours.md` — Notification hold + timezone-aware delivery
+- `docs/guides/diligence-ingestion.md` — Data room to brain pages pipeline
 - `docs/designs/HOMEBREW_FOR_PERSONAL_AI.md` — 10-star vision for integration system
 - `scripts/deploy-remote.sh` — One-script remote MCP deployment
 - `docs/mcp/` — Per-client setup guides (Claude Desktop, Code, Cowork, Perplexity, ChatGPT)
