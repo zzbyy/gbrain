@@ -203,6 +203,9 @@ upgrade, not document the implementation.
   silent sync failures and stale embeddings before they bite you"
 - Bad: "Setup skill Phase H and Phase I added"
 - Good: "New installs automatically set up live sync so your brain never falls behind"
+- **Always credit community contributions.** When a CHANGELOG entry includes work from
+  a community PR, name the contributor with `Contributed by @username`. Contributors
+  did real work. Thank them publicly every time, no exceptions.
 
 ## Version migrations
 
