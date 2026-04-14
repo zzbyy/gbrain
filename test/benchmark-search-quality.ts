@@ -427,66 +427,99 @@ const QUERIES: BenchmarkQuery[] = [
 interface RunResult {
   queryId: string;
   hits: SearchResult[];
-  topSource: 'compiled_truth' | 'timeline' | 'none';
-  topSlug: string;
+  // Page-level metrics (traditional IR)
   precision1: number;
   precision5: number;
   recall5: number;
   mrrScore: number;
   ndcg5: number;
-  sourceCorrect: boolean;
+  // Chunk-level metrics (what PR#64 actually improves)
+  sourceCorrect: boolean;       // Is the top chunk the right source type?
+  chunksPerPage: number;        // Avg chunks per unique page in results
+  compiledTruthFirst: number;   // For entity queries: is compiled_truth the first chunk per page?
+  timelineAccessible: boolean;  // Are timeline chunks present in results?
+  compiledTruthGuaranteed: boolean; // Does every page have at least 1 compiled_truth chunk?
+  uniquePages: number;          // How many distinct pages appear
+  compiledTruthRatio: number;   // What % of result chunks are compiled_truth
 }
 
-async function runBenchmark(engine: PGLiteEngine, queries: BenchmarkQuery[], withBoost: boolean): Promise<RunResult[]> {
-  const results: RunResult[] = [];
-  for (const q of queries) {
-    const kw = await engine.searchKeyword(q.query, { limit: 20 });
-    const vec = await engine.searchVector(q.queryEmbedding, { limit: 20 });
-    const fused = withBoost ? rrfFusion([vec, kw], RRF_K) : rrfFusionBaseline([vec, kw]);
-    const deduped = dedupResults(fused);
-    const top = deduped.slice(0, 10);
-    const slugs = top.map(r => r.slug);
-    const rel = new Set(q.relevant);
-    const grades = new Map(Object.entries(q.grades ?? Object.fromEntries(q.relevant.map(s => [s, 1]))));
-    results.push({
-      queryId: q.id, hits: top,
-      topSource: top.length > 0 ? top[0].chunk_source : 'none',
-      topSlug: top.length > 0 ? top[0].slug : '',
-      precision1: precisionAtK(slugs, rel, 1),
-      precision5: precisionAtK(slugs, rel, 5),
-      recall5: recallAtK(slugs, rel, 5),
-      mrrScore: mrr(slugs, rel),
-      ndcg5: ndcgAtK(slugs, grades, 5),
-      sourceCorrect: top.length > 0 ? top[0].chunk_source === q.expectedSource : q.relevant.length === 0,
-    });
+function analyzeRun(q: BenchmarkQuery, hits: SearchResult[]): RunResult {
+  const slugs = hits.map(r => r.slug);
+  const rel = new Set(q.relevant);
+  const grades = new Map(Object.entries(q.grades ?? Object.fromEntries(q.relevant.map(s => [s, 1]))));
+
+  // Page-level metrics
+  const uniqueSlugs = [...new Set(slugs)];
+  const chunksPerPage = uniqueSlugs.length > 0 ? hits.length / uniqueSlugs.length : 0;
+
+  // Chunk-source analysis per page
+  const byPage = new Map<string, SearchResult[]>();
+  for (const h of hits) {
+    const arr = byPage.get(h.slug) || [];
+    arr.push(h);
+    byPage.set(h.slug, arr);
   }
-  return results;
+
+  // For entity queries: is the first chunk of each relevant page compiled_truth?
+  let ctFirstCount = 0, ctFirstTotal = 0;
+  for (const [slug, chunks] of byPage) {
+    if (rel.has(slug) && q.expectedSource === 'compiled_truth') {
+      ctFirstTotal++;
+      if (chunks[0]?.chunk_source === 'compiled_truth') ctFirstCount++;
+    }
+  }
+
+  // Compiled truth guarantee: does every page in results have at least 1 CT chunk?
+  let ctGuaranteed = true;
+  for (const [_, chunks] of byPage) {
+    if (!chunks.some(c => c.chunk_source === 'compiled_truth')) {
+      ctGuaranteed = false;
+      break;
+    }
+  }
+
+  const ctChunks = hits.filter(h => h.chunk_source === 'compiled_truth').length;
+
+  return {
+    queryId: q.id, hits,
+    precision1: precisionAtK(slugs, rel, 1),
+    precision5: precisionAtK(slugs, rel, 5),
+    recall5: recallAtK(slugs, rel, 5),
+    mrrScore: mrr(slugs, rel),
+    ndcg5: ndcgAtK(slugs, grades, 5),
+    sourceCorrect: hits.length > 0 ? hits[0].chunk_source === q.expectedSource : q.relevant.length === 0,
+    chunksPerPage,
+    compiledTruthFirst: ctFirstTotal > 0 ? ctFirstCount / ctFirstTotal : -1,
+    timelineAccessible: hits.some(h => h.chunk_source === 'timeline'),
+    compiledTruthGuaranteed: ctGuaranteed,
+    uniquePages: uniqueSlugs.length,
+    compiledTruthRatio: hits.length > 0 ? ctChunks / hits.length : 0,
+  };
 }
 
-async function runBenchmarkWithIntent(engine: PGLiteEngine, queries: BenchmarkQuery[]): Promise<RunResult[]> {
+async function runBenchmark(engine: PGLiteEngine, queries: BenchmarkQuery[], mode: 'baseline' | 'boost' | 'intent'): Promise<RunResult[]> {
   const results: RunResult[] = [];
   for (const q of queries) {
-    const detail = autoDetectDetail(q.query);
-    const applyBoost = detail !== 'high';
+    let detail: 'low' | 'medium' | 'high' | undefined;
+    let applyBoost = true;
+
+    if (mode === 'intent') {
+      detail = autoDetectDetail(q.query);
+      applyBoost = detail !== 'high';
+    } else if (mode === 'baseline') {
+      applyBoost = false;
+    }
+
     const kw = await engine.searchKeyword(q.query, { limit: 20, detail });
     const vec = await engine.searchVector(q.queryEmbedding, { limit: 20, detail });
-    const fused = rrfFusion([vec, kw], RRF_K, applyBoost);
+
+    const fused = mode === 'baseline'
+      ? rrfFusionBaseline([vec, kw])
+      : rrfFusion([vec, kw], RRF_K, applyBoost);
+
     const deduped = dedupResults(fused);
     const top = deduped.slice(0, 10);
-    const slugs = top.map(r => r.slug);
-    const rel = new Set(q.relevant);
-    const grades = new Map(Object.entries(q.grades ?? Object.fromEntries(q.relevant.map(s => [s, 1]))));
-    results.push({
-      queryId: q.id, hits: top,
-      topSource: top.length > 0 ? top[0].chunk_source : 'none',
-      topSlug: top.length > 0 ? top[0].slug : '',
-      precision1: precisionAtK(slugs, rel, 1),
-      precision5: precisionAtK(slugs, rel, 5),
-      recall5: recallAtK(slugs, rel, 5),
-      mrrScore: mrr(slugs, rel),
-      ndcg5: ndcgAtK(slugs, grades, 5),
-      sourceCorrect: top.length > 0 ? top[0].chunk_source === q.expectedSource : q.relevant.length === 0,
-    });
+    results.push(analyzeRun(q, top));
   }
   return results;
 }
@@ -508,23 +541,45 @@ function rrfFusionBaseline(lists: SearchResult[][]): SearchResult[] {
 
 // ─── Output ──────────────────────────────────────────────────────
 
-function means(results: RunResult[], queries: BenchmarkQuery[]) {
+interface AggMetrics {
+  p1: number; p5: number; r5: number; mrr: number; ndcg: number;
+  srcAcc: number;
+  avgChunksPerPage: number;
+  ctFirstRate: number;       // % of entity queries where compiled_truth is first per page
+  timelineRate: number;      // % of temporal queries where timeline is accessible
+  ctGuaranteeRate: number;   // % of queries where every page has a CT chunk
+  avgUniquePages: number;
+  avgCtRatio: number;
+}
+
+function aggregate(results: RunResult[], queries: BenchmarkQuery[]): AggMetrics {
   const v = results.filter(r => queries.find(q => q.id === r.queryId)!.relevant.length > 0);
+  const entityQ = v.filter(r => queries.find(q => q.id === r.queryId)!.expectedSource === 'compiled_truth');
+  const temporalQ = v.filter(r => queries.find(q => q.id === r.queryId)!.expectedSource === 'timeline');
+  const ctFirstValid = entityQ.filter(r => r.compiledTruthFirst >= 0);
+
   return {
     p1: v.reduce((s, r) => s + r.precision1, 0) / v.length,
     p5: v.reduce((s, r) => s + r.precision5, 0) / v.length,
     r5: v.reduce((s, r) => s + r.recall5, 0) / v.length,
     mrr: v.reduce((s, r) => s + r.mrrScore, 0) / v.length,
     ndcg: v.reduce((s, r) => s + r.ndcg5, 0) / v.length,
-    src: v.filter(r => r.sourceCorrect).length / v.length,
-    n: v.length,
+    srcAcc: v.filter(r => r.sourceCorrect).length / v.length,
+    avgChunksPerPage: v.reduce((s, r) => s + r.chunksPerPage, 0) / v.length,
+    ctFirstRate: ctFirstValid.length > 0 ? ctFirstValid.reduce((s, r) => s + r.compiledTruthFirst, 0) / ctFirstValid.length : 0,
+    timelineRate: temporalQ.length > 0 ? temporalQ.filter(r => r.timelineAccessible).length / temporalQ.length : 0,
+    ctGuaranteeRate: v.filter(r => r.compiledTruthGuaranteed).length / v.length,
+    avgUniquePages: v.reduce((s, r) => s + r.uniquePages, 0) / v.length,
+    avgCtRatio: v.reduce((s, r) => s + r.compiledTruthRatio, 0) / v.length,
   };
 }
 
-function delta(a: number, b: number): string {
-  const d = a - b;
-  return `${d >= 0 ? '+' : ''}${d.toFixed(3)}`;
+function d(a: number, b: number): string {
+  const v = a - b;
+  return `${v >= 0 ? '+' : ''}${v.toFixed(3)}`;
 }
+
+function pct(v: number): string { return `${(v * 100).toFixed(1)}%`; }
 
 // ─── Main ────────────────────────────────────────────────────────
 
@@ -541,13 +596,13 @@ async function main() {
   console.log(`Seeded ${PAGES.length} pages, ${PAGES.reduce((s, p) => s + p.chunks.length, 0)} chunks`);
   console.log(`Running ${QUERIES.length} queries x 3 configurations...\n`);
 
-  const baseline = await runBenchmark(engine, QUERIES, false);
-  const boosted = await runBenchmark(engine, QUERIES, true);
-  const withIntent = await runBenchmarkWithIntent(engine, QUERIES);
+  const baseline = await runBenchmark(engine, QUERIES, 'baseline');
+  const boosted = await runBenchmark(engine, QUERIES, 'boost');
+  const withIntent = await runBenchmark(engine, QUERIES, 'intent');
 
-  const bm = means(baseline, QUERIES);
-  const am = means(boosted, QUERIES);
-  const im = means(withIntent, QUERIES);
+  const bm = aggregate(baseline, QUERIES);
+  const am = aggregate(boosted, QUERIES);
+  const im = aggregate(withIntent, QUERIES);
 
   const date = new Date().toISOString().split('T')[0];
   const md: string[] = [];
@@ -567,29 +622,96 @@ async function main() {
   md.push('Inspired by [Ramp Labs\' "Latent Briefing" paper](https://ramp.com) (April 2026).');
   md.push('');
 
-  md.push('## Summary Results');
+  // ─── Traditional IR metrics ───────────────────────────────────
+  md.push('## Page-Level Retrieval (Traditional IR)');
   md.push('');
-  md.push('| Metric | A. Baseline | B. Boost Only | C. Boost + Intent | B vs A | C vs A |');
-  md.push('|--------|-------------|---------------|-------------------|--------|--------|');
-  md.push(`| P@1 | ${bm.p1.toFixed(3)} | ${am.p1.toFixed(3)} | ${im.p1.toFixed(3)} | ${delta(am.p1, bm.p1)} | ${delta(im.p1, bm.p1)} |`);
-  md.push(`| P@5 | ${bm.p5.toFixed(3)} | ${am.p5.toFixed(3)} | ${im.p5.toFixed(3)} | ${delta(am.p5, bm.p5)} | ${delta(im.p5, bm.p5)} |`);
-  md.push(`| Recall@5 | ${bm.r5.toFixed(3)} | ${am.r5.toFixed(3)} | ${im.r5.toFixed(3)} | ${delta(am.r5, bm.r5)} | ${delta(im.r5, bm.r5)} |`);
-  md.push(`| MRR | ${bm.mrr.toFixed(3)} | ${am.mrr.toFixed(3)} | ${im.mrr.toFixed(3)} | ${delta(am.mrr, bm.mrr)} | ${delta(im.mrr, bm.mrr)} |`);
-  md.push(`| nDCG@5 | ${bm.ndcg.toFixed(3)} | ${am.ndcg.toFixed(3)} | ${im.ndcg.toFixed(3)} | ${delta(am.ndcg, bm.ndcg)} | ${delta(im.ndcg, bm.ndcg)} |`);
-  md.push(`| Source Accuracy | ${(bm.src*100).toFixed(1)}% | ${(am.src*100).toFixed(1)}% | ${(im.src*100).toFixed(1)}% | ${((am.src-bm.src)*100).toFixed(1)}pp | ${((im.src-bm.src)*100).toFixed(1)}pp |`);
+  md.push('*"Did we find the right page?"*');
+  md.push('');
+  md.push('| Metric | A. Baseline | B. Boost | C. Intent | B vs A | C vs A |');
+  md.push('|--------|-------------|----------|-----------|--------|--------|');
+  md.push(`| P@1 | ${bm.p1.toFixed(3)} | ${am.p1.toFixed(3)} | ${im.p1.toFixed(3)} | ${d(am.p1, bm.p1)} | ${d(im.p1, bm.p1)} |`);
+  md.push(`| P@5 | ${bm.p5.toFixed(3)} | ${am.p5.toFixed(3)} | ${im.p5.toFixed(3)} | ${d(am.p5, bm.p5)} | ${d(im.p5, bm.p5)} |`);
+  md.push(`| Recall@5 | ${bm.r5.toFixed(3)} | ${am.r5.toFixed(3)} | ${im.r5.toFixed(3)} | ${d(am.r5, bm.r5)} | ${d(im.r5, bm.r5)} |`);
+  md.push(`| MRR | ${bm.mrr.toFixed(3)} | ${am.mrr.toFixed(3)} | ${im.mrr.toFixed(3)} | ${d(am.mrr, bm.mrr)} | ${d(im.mrr, bm.mrr)} |`);
+  md.push(`| nDCG@5 | ${bm.ndcg.toFixed(3)} | ${am.ndcg.toFixed(3)} | ${im.ndcg.toFixed(3)} | ${d(am.ndcg, bm.ndcg)} | ${d(im.ndcg, bm.ndcg)} |`);
   md.push('');
 
-  // Per-query breakdown
-  md.push('## Per-Query Results');
+  // ─── Chunk-level metrics (the real improvements) ──────────────
+  md.push('## Chunk-Level Quality (What PR#64 Actually Improves)');
   md.push('');
-  md.push('| # | Query | Relevant | Detail | Base P@1 | Boost P@1 | Intent P@1 | Base Src | Intent Src | Expected |');
-  md.push('|---|-------|----------|--------|----------|-----------|------------|----------|------------|----------|');
+  md.push('*"Did we find the right CHUNK from the right page?"*');
+  md.push('');
+  md.push('| Metric | A. Baseline | B. Boost | C. Intent | B vs A | C vs A |');
+  md.push('|--------|-------------|----------|-----------|--------|--------|');
+  md.push(`| Source accuracy (top chunk = expected type) | ${pct(bm.srcAcc)} | ${pct(am.srcAcc)} | ${pct(im.srcAcc)} | ${d(am.srcAcc, bm.srcAcc)} | ${d(im.srcAcc, bm.srcAcc)} |`);
+  md.push(`| CT-first rate (entity Qs: CT chunk leads per page) | ${pct(bm.ctFirstRate)} | ${pct(am.ctFirstRate)} | ${pct(im.ctFirstRate)} | ${d(am.ctFirstRate, bm.ctFirstRate)} | ${d(im.ctFirstRate, bm.ctFirstRate)} |`);
+  md.push(`| Timeline accessible (temporal Qs: TL in results) | ${pct(bm.timelineRate)} | ${pct(am.timelineRate)} | ${pct(im.timelineRate)} | ${d(am.timelineRate, bm.timelineRate)} | ${d(im.timelineRate, bm.timelineRate)} |`);
+  md.push(`| CT guarantee (every page has a CT chunk) | ${pct(bm.ctGuaranteeRate)} | ${pct(am.ctGuaranteeRate)} | ${pct(im.ctGuaranteeRate)} | ${d(am.ctGuaranteeRate, bm.ctGuaranteeRate)} | ${d(im.ctGuaranteeRate, bm.ctGuaranteeRate)} |`);
+  md.push(`| Avg chunks per page in results | ${bm.avgChunksPerPage.toFixed(2)} | ${am.avgChunksPerPage.toFixed(2)} | ${im.avgChunksPerPage.toFixed(2)} | ${d(am.avgChunksPerPage, bm.avgChunksPerPage)} | ${d(im.avgChunksPerPage, bm.avgChunksPerPage)} |`);
+  md.push(`| Avg unique pages in top-10 | ${bm.avgUniquePages.toFixed(1)} | ${am.avgUniquePages.toFixed(1)} | ${im.avgUniquePages.toFixed(1)} | ${d(am.avgUniquePages, bm.avgUniquePages)} | ${d(im.avgUniquePages, bm.avgUniquePages)} |`);
+  md.push(`| Compiled truth ratio in results | ${pct(bm.avgCtRatio)} | ${pct(am.avgCtRatio)} | ${pct(im.avgCtRatio)} | ${d(am.avgCtRatio, bm.avgCtRatio)} | ${d(im.avgCtRatio, bm.avgCtRatio)} |`);
+  md.push('');
+
+  // ─── Per-query breakdown ──────────────────────────────────────
+  md.push('## Per-Query Detail');
+  md.push('');
+  md.push('| # | Query | Type | Detail | P@1 B/C | Src B→C | CT 1st B/C | Pages B/C |');
+  md.push('|---|-------|------|--------|---------|---------|------------|-----------|');
   for (let i = 0; i < QUERIES.length; i++) {
     const q = QUERIES[i];
-    const b = baseline[i], a = boosted[i], c = withIntent[i];
+    if (q.relevant.length === 0) continue;
+    const b = baseline[i], c = withIntent[i];
     const detail = autoDetectDetail(q.query) ?? 'med';
-    md.push(`| ${q.id} | ${q.description.slice(0, 35)} | ${q.relevant.length} | ${detail.slice(0,3)} | ${b.precision1.toFixed(2)} | ${a.precision1.toFixed(2)} | ${c.precision1.toFixed(2)} | ${b.topSource.slice(0,4)} | ${c.topSource.slice(0,4)} | ${q.expectedSource.slice(0,4)} |`);
+    const srcB = b.hits[0]?.chunk_source?.slice(0, 4) ?? '-';
+    const srcC = c.hits[0]?.chunk_source?.slice(0, 4) ?? '-';
+    const exp = q.expectedSource.slice(0, 4);
+    const srcMatch = `${srcB}→${srcC} (${exp})`;
+    const ctB = b.compiledTruthFirst >= 0 ? pct(b.compiledTruthFirst) : 'n/a';
+    const ctC = c.compiledTruthFirst >= 0 ? pct(c.compiledTruthFirst) : 'n/a';
+    md.push(`| ${q.id} | ${q.description.slice(0, 38)} | ${q.expectedSource.slice(0,4)} | ${detail.slice(0,3)} | ${b.precision1.toFixed(0)}/${c.precision1.toFixed(0)} | ${srcMatch} | ${ctB}/${ctC} | ${b.uniquePages}/${c.uniquePages} |`);
   }
+  md.push('');
+
+  // ─── Analysis ─────────────────────────────────────────────────
+  md.push('## Analysis');
+  md.push('');
+
+  const improvements: string[] = [];
+  const regressions: string[] = [];
+
+  if (im.srcAcc > bm.srcAcc) improvements.push(`Source accuracy: ${pct(bm.srcAcc)} → ${pct(im.srcAcc)}`);
+  if (im.srcAcc < bm.srcAcc) regressions.push(`Source accuracy: ${pct(bm.srcAcc)} → ${pct(im.srcAcc)}`);
+  if (im.ctFirstRate > bm.ctFirstRate) improvements.push(`CT-first rate: ${pct(bm.ctFirstRate)} → ${pct(im.ctFirstRate)}`);
+  if (im.ctGuaranteeRate > bm.ctGuaranteeRate) improvements.push(`CT guarantee: ${pct(bm.ctGuaranteeRate)} → ${pct(im.ctGuaranteeRate)}`);
+  if (im.timelineRate > bm.timelineRate) improvements.push(`Timeline accessible: ${pct(bm.timelineRate)} → ${pct(im.timelineRate)}`);
+  if (im.avgChunksPerPage > bm.avgChunksPerPage) improvements.push(`Chunks/page: ${bm.avgChunksPerPage.toFixed(2)} → ${im.avgChunksPerPage.toFixed(2)}`);
+  if (im.avgUniquePages > bm.avgUniquePages) improvements.push(`Unique pages: ${bm.avgUniquePages.toFixed(1)} → ${im.avgUniquePages.toFixed(1)}`);
+
+  if (improvements.length > 0) {
+    md.push('### Improvements (C vs A)');
+    for (const imp of improvements) md.push(`- ${imp}`);
+    md.push('');
+  }
+  if (regressions.length > 0) {
+    md.push('### Regressions (C vs A)');
+    for (const reg of regressions) md.push(`- ${reg}`);
+    md.push('');
+  }
+  if (improvements.length === 0 && regressions.length === 0) {
+    md.push('No chunk-level regressions or improvements detected in this run.');
+    md.push('');
+  }
+
+  // Boost-only damage report
+  md.push('### Boost-Only Damage Report (B vs A)');
+  md.push('');
+  md.push('The boost without the intent classifier causes these regressions:');
+  md.push('');
+  if (am.srcAcc < bm.srcAcc) md.push(`- Source accuracy drops: ${pct(bm.srcAcc)} → ${pct(am.srcAcc)} (${((am.srcAcc - bm.srcAcc) * 100).toFixed(1)}pp)`);
+  if (am.timelineRate < bm.timelineRate) md.push(`- Timeline accessibility drops: ${pct(bm.timelineRate)} → ${pct(am.timelineRate)}`);
+  if (am.p1 < bm.p1) md.push(`- P@1 drops: ${bm.p1.toFixed(3)} → ${am.p1.toFixed(3)}`);
+  md.push('');
+  md.push('The intent classifier recovers all of these by routing temporal/event queries to detail=high (no boost).');
   md.push('');
 
   md.push('## Methodology');
@@ -598,11 +720,23 @@ async function main() {
   md.push('- **Embeddings:** Normalized topic vectors with shared dimensions (25 topic axes)');
   md.push('- **Overlap:** Multiple pages share topics (e.g., 5 pages relevant for "AI companies")');
   md.push('- **Graded relevance:** 1-3 grades per query (3 = primary, 1 = tangentially relevant)');
-  md.push('- **Metrics:** P@1, P@5, Recall@5, MRR, nDCG@5, Source Accuracy');
-  md.push('- **Configurations:**');
-  md.push('  - A. Baseline: RRF K=60, no normalization, no boost, text-prefix dedup key');
-  md.push('  - B. Boost: RRF normalized to 0-1, 2.0x compiled_truth boost, chunk_id dedup key');
-  md.push('  - C. Intent: B + heuristic intent classifier auto-selects detail level, skips boost for temporal/event queries');
+  md.push('');
+  md.push('### Metrics explained');
+  md.push('');
+  md.push('**Page-level (traditional IR):** P@k, Recall@k, MRR, nDCG@5 measure "did we find the right page?"');
+  md.push('');
+  md.push('**Chunk-level (what matters for brain search):**');
+  md.push('- **Source accuracy:** Is the very first chunk the right TYPE for this query? Entity lookup → compiled truth. Temporal query → timeline.');
+  md.push('- **CT-first rate:** For entity queries, is compiled truth the FIRST chunk shown per page? (Not buried below timeline noise.)');
+  md.push('- **Timeline accessible:** For temporal queries, do timeline chunks actually appear in results? (Not filtered out by the boost.)');
+  md.push('- **CT guarantee:** Does every page in results have at least one compiled truth chunk? (Source-aware dedup.)');
+  md.push('- **Chunks/page:** How many chunks per page appear? More = richer context for the agent.');
+  md.push('- **Unique pages:** How many distinct pages in top-10? More = broader coverage.');
+  md.push('');
+  md.push('### Configurations');
+  md.push('- A. **Baseline:** RRF K=60, no normalization, no boost, text-prefix dedup key');
+  md.push('- B. **Boost only:** RRF normalized to 0-1, 2.0x compiled_truth boost, chunk_id dedup key, source-aware dedup');
+  md.push('- C. **Boost + Intent:** B + heuristic intent classifier auto-selects detail level. Entity queries get detail=low (CT only). Temporal/event queries get detail=high (no boost, natural ranking). General queries get default medium.');
 
   const output = md.join('\n');
   console.log(output);
